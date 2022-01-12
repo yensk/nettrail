@@ -63,7 +63,7 @@ def scan(arguments):
 
         if len(scan_results["ports"]) > 0:
                 scan_results = detailed_scan_ip(target, scan_results["ports"])
-        logger.info(f"[P]   {nmap_analyzer.get_ports_fingerprint(scan_results['ports'])}")
+        logger.info(f"    [P] {nmap_analyzer.get_ports_fingerprint(scan_results['ports'])}")
 
 def analyze(arguments):
     logger.debug("ANALYSIS MODE")
@@ -101,6 +101,8 @@ def cleanup(arguments):
             input_data.extend(f.readlines())
     targets = parse_targets(input_data)
     clean_up_folders(targets, out_dir)
+
+    clean_up_noports(targets, out_dir)
 
 def show(arguments):
     logger.debug("SHOW MODE")
@@ -151,6 +153,18 @@ def clean_up_folders(targets, directory):
                         logger.info(f"Moving '{dir}' to '{dest_folder}'")
                         shutil.move(os.path.join(root,dir),os.path.join(root,dest_folder))
 
+def clean_up_noports(targets, directory):
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            for n in ("all_ports.xml", "partial_ports.xml", "detailed_ports.xml", "fast_ports.xml"):
+                path = os.path.join(root, dir, n)
+                tmp = nmap_analyzer.parse_nmap_xml(path, filter)
+                if len(tmp["ports"]):
+                    print(f"[!] File '{path}' is finished scan, but does not contain open ports. Delete (y/N)?")
+                    r=input()
+                    if r.lower() == "y":
+                        os.remove(path)
+
 def get_nmap_target(target):
     if target["hostname"] != "" and target["hostname"].lower() != "unknown":
         return target["hostname"]
@@ -165,10 +179,10 @@ def nmap_scan(filename, nmap_arguments, ports=None):
             port_arg = f"-p{','.join([str(i) for i in ports_to_scan])}"
         nmap_command = f"nmap -vvvv {helper.nmap_exclude} {helper.nmap_dns_arg} {port_arg} -oA '{filename}' {nmap_arguments}"
 
-        logger.info(f"[ ]   Running: {nmap_command}")
+        logger.info(f"    [ ] Running: {nmap_command}")
         os.system(nmap_command)
     else:
-        logger.info(f"[ ]   {filename} already exists. Skipping port scan.")
+        logger.info(f"    [ ] {filename} already exists. Skipping port scan.")
     return nmap_analyzer.parse_nmap_xml(filename+".xml")
 
 def full_scan_ip(target):
@@ -267,7 +281,7 @@ analyze_parser.add_argument('-T', dest = 'filter_not_top1000', help = 'Analysis 
 analyze_parser.add_argument('operation', help = "analysis operation to be performed. classes: show equivalence class view of all hosts. flatlist: show services of all hosts", default = '', choices=["classes","flatlist"]) 
 analyze_parser.set_defaults(func=analyze)
 
-cleanup_parser = subparsers.add_parser('cleanup', help='Do nothing. Just update the folder names')
+cleanup_parser = subparsers.add_parser('cleanup', help='Do nothing. Just update the folder names and check for inconsistent scanning results.')
 cleanup_parser.add_argument('-i', dest = 'hostname_file', help = 'File that contains target IPs', default = '')
 cleanup_parser.set_defaults(func=cleanup)
 

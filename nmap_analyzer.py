@@ -80,12 +80,17 @@ def parse_all_hosts(directory, filter=Filter()):
 
             # Use the most detailled information available -> Start with least specific and overwrite it if more information is available
             host = {}
+
+            if "fast_ports.xml" in dir_files:
+                tmp = parse_nmap_xml(os.path.join(root, dir, "fast_ports.xml"), filter)
+                host = join_host_info(host, tmp)
+
             if "all_ports.xml" in dir_files:
                 tmp = parse_nmap_xml(os.path.join(root, dir, "all_ports.xml"), filter)
                 host = join_host_info(host, tmp)
 
-            if "partial_detailed_ports.xml" in dir_files:
-                tmp = parse_nmap_xml(os.path.join(root, dir, "partial_detailed_ports.xml"), filter)
+            if "partial_ports.xml" in dir_files:
+                tmp = parse_nmap_xml(os.path.join(root, dir, "partial_ports.xml"), filter)
                 host = join_host_info(host, tmp)
 
             if "detailed_ports.xml" in dir_files:
@@ -172,7 +177,7 @@ def get_ports_fingerprint(ports):
 
 def nmap_xml_is_finished_run(filename, ports):
     if not os.path.exists(filename):
-        return False
+        return False, ports
     with open(filename, "r") as f:
         run_is_finished = "</nmaprun" in "\n".join(f.readlines())
         if not run_is_finished:
@@ -186,7 +191,7 @@ def nmap_xml_is_finished_run(filename, ports):
             ports_to_scan = res["ports"].keys() & ports
             for p in ports:
                 if not p in res["ports"]:
-                    logger.info(f"[E] Scan results exist, but port {p} is not contained in them.")
+                    logger.info(f"  [E] Scan results exist, but port {p} is not contained in them.")
 
                     # Ports that were scanned before do not include all ports to be scanned -> Return a combined list of ports to scan, so that we don't drop the old ones.
                     return False, ports_to_scan
@@ -223,6 +228,3 @@ def find_hosts(search_str, ports, folder):
                             break
 
     return results
-
-if __name__ == "__main__":
-    ports = parse_nmap_xml("/home/kali/ITK/network_scan/output/5CD9270RCG.ITK.LOCAL___/detailed_ports.xml")
