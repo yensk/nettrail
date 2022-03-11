@@ -2,7 +2,12 @@ import socket
 from log import logger
 
 def get_hostname_by_ipv4(ip):
-    return socket.gethostbyaddr(ip)[0]
+    hostname = ip
+    try:
+        hostname = socket.gethostbyaddr(ip)[0]
+    except:
+        logger.info(f"[ ] Could not resolve {ip}.")
+    return hostname
 
 def get_ipv4_by_hostname(hostname):
     logger.debug("Resolving: "+hostname)

@@ -19,7 +19,16 @@ def nmap_range_scan(range, out_dir):
     os.makedirs(f"{os.path.dirname(filename)}", exist_ok=True)
     logger.info(f"Running: {nmap_command}")
     os.system(nmap_command)
-    return parse_nmap_range_scan(filename+".xml")
+    hosts = parse_nmap_range_scan(filename+".xml")
+    
+    with open(filename+".txt", "w") as f:
+        for host in hosts:
+            comment = ""
+            if hosts[host]["comment"] != "":
+                comment += " "+hosts[host]["comment"]
+            f.write(host+comment+"\n")
+
+    return hosts
 
 def parse_nmap_range_scan(file_path):
     hosts = {}
@@ -31,13 +40,13 @@ def parse_nmap_range_scan(file_path):
         return {}
 
     xml_hosts = tree.findall("host[status]")
-
+    pdb.set_trace()
     for xml_host in xml_hosts:
         if not xml_host.find("status").attrib["state"] == 'up':
             continue
 
-        if xml_host.find("status").attrib["reason"] == 'reset':
-            continue
+        #if xml_host.find("status").attrib["reason"] == 'reset':
+        #    continue
 
         ip = xml_host.find("address").attrib["addr"]
         tmp = xml_host.findall("hostnames/hostname")
@@ -47,10 +56,10 @@ def parse_nmap_range_scan(file_path):
 
         if len(hostnames) > 0:
             for hostname in hostnames:
-                host = {"ip": ip, "hostname": hostname, "comment": ""}
+                host = {"host_ip": ip, "hostname": hostname, "comment": ""}
                 hosts[helper.get_host_id(host)] = host
         else:
-            host = {"ip": ip, "hostname": "unknown", "comment": ""}
+            host = {"host_ip": ip, "hostname": "unknown", "comment": ""}
             hosts[helper.get_host_id(host)] = host
     
     return hosts

@@ -38,7 +38,7 @@ def parse_nmap_xml(file_path,filter=Filter()):
         tree = ET.parse(file_path)
     except Exception as e:
         logger.debug(f"ERROR parsing file: {file_path}. "+str(e))
-        return {}
+        return False
 
     open_ports = {}
     res["ports"] = open_ports
@@ -70,32 +70,40 @@ def parse_nmap_xml(file_path,filter=Filter()):
             open_ports[p["portid"]] = p
     return res
 
+def get_combined_scan_results(directory, filter=Filter()):
+    # Use the most detailled information available -> Start with least specific and overwrite it if more information is available
+    host = {}
+    if os.path.exists(directory):
+        dir_files = os.listdir(directory)
+
+        if "fast_ports.xml" in dir_files:
+            tmp = parse_nmap_xml(os.path.join(directory, "fast_ports.xml"), filter)
+            host = join_host_info(host, tmp)
+
+        if "all_ports.xml" in dir_files:
+            tmp = parse_nmap_xml(os.path.join(directory, "all_ports.xml"), filter)
+            host = join_host_info(host, tmp)
+
+        if "partial_ports.xml" in dir_files:
+            tmp = parse_nmap_xml(os.path.join(directory, "partial_ports.xml"), filter)
+            host = join_host_info(host, tmp)
+
+        if "detailed_ports.xml" in dir_files:
+            tmp = parse_nmap_xml(os.path.join(directory, "detailed_ports.xml"), filter)
+            host = join_host_info(host, tmp)
+
+        if "batch_ports.xml" in dir_files:
+            tmp = parse_nmap_xml(os.path.join(directory, "batch_ports.xml"), filter)
+            host = join_host_info(host, tmp)
+
+    return host
+
 def parse_all_hosts(directory, filter=Filter()):
     hosts = {}
-
+    
     for root, dirs, files in os.walk(directory):
-        for dir in dirs:
-            dir_files = os.listdir(os.path.join(root,dir))
-            logger.debug(dir_files)
-
-            # Use the most detailled information available -> Start with least specific and overwrite it if more information is available
-            host = {}
-
-            if "fast_ports.xml" in dir_files:
-                tmp = parse_nmap_xml(os.path.join(root, dir, "fast_ports.xml"), filter)
-                host = join_host_info(host, tmp)
-
-            if "all_ports.xml" in dir_files:
-                tmp = parse_nmap_xml(os.path.join(root, dir, "all_ports.xml"), filter)
-                host = join_host_info(host, tmp)
-
-            if "partial_ports.xml" in dir_files:
-                tmp = parse_nmap_xml(os.path.join(root, dir, "partial_ports.xml"), filter)
-                host = join_host_info(host, tmp)
-
-            if "detailed_ports.xml" in dir_files:
-                tmp = parse_nmap_xml(os.path.join(root, dir, "detailed_ports.xml"), filter)
-                host = join_host_info(host, tmp)
+        for d in dirs:
+            host = get_combined_scan_results(os.path.join(root,d), filter)
 
             if(len(host) > 0 and not filter.is_host_filtered(host)):
                 hosts[host["host_ip"]] = host
@@ -104,7 +112,7 @@ def parse_all_hosts(directory, filter=Filter()):
     return hosts
 
 def join_host_info(host1, host2):
-    if len(host2) == 0:
+    if host2 == False or len(host2) == 0:
         return host1
 
     if not "hostname" in host1 or host1["hostname"] == "unknown":
@@ -185,10 +193,12 @@ def nmap_xml_is_finished_run(filename, ports):
 
         # Check if all ports that should be scanned were already scanned
         res = parse_nmap_xml(filename)
+        if res == False:
+            return False, ports
         if ports == None:
             ports_to_scan = res["ports"].keys()
         else:
-            ports_to_scan = res["ports"].keys() & ports
+            ports_to_scan = res["ports"].keys() | ports
             for p in ports:
                 if not p in res["ports"]:
                     logger.info(f"  [E] Scan results exist, but port {p} is not contained in them.")
@@ -209,11 +219,11 @@ def find_hosts(search_str, ports, folder):
         for file in files:
             with open(os.path.join(root,file), "r") as f:
                 for line in f.readlines():
-                    if search_str in line:
-                        folders = root.split("/")
-                        if len(folders) < 3:
+                    if search_str.lower() in line.lower():
+                        folders = root.split(os.path.sep)
+                        if len(folders) < 1:
                             continue
-                        hostname = folders[2].split("_")[0]
+                        hostname = folders[-1].split("_")[0]
                         
                         if ports != None and len(ports) > 0:
                             for host in hosts.values():

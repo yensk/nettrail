@@ -13,6 +13,10 @@ def target_to_foldername(target):
     host = get_host_id(target)
     return f"{host}___{target['comment']}"
 
+def target_to_folderpath(target, out_dir):
+    foldername=target_to_foldername(target)
+    return os.path.join(out_dir, foldername)
+
 def hostname_to_filepath(hostname, output_folder):
     for root, dirs, files in os.walk(output_folder):
         for dir in dirs:

@@ -11,6 +11,7 @@ from log import logger
 import shutil
 import helper
 import pdb
+import exporter
 
 def discover(arguments):
     logger.debug("DISCOVER MODE")
@@ -38,11 +39,10 @@ def scan(arguments):
 
     partial_scan = arguments.partial_scan
     fast_scan = arguments.fast_scan
+    batch_scan = arguments.batch_scan
+    full_scan = not batch_scan and not fast_scan and not partial_scan
 
     input_data = arguments.hostnames
-
-    if input_data == None or input_data.strip() == "":
-        input_data = []
 
     if arguments.hostname_file != '':
         with open(arguments.hostname_file, "r") as f:
@@ -53,23 +53,31 @@ def scan(arguments):
         logger.error(f"To scan you have to run the program with root privileges.")
         exit()
 
+    if batch_scan:
+        batch_scan_ip(targets)
+
     for target in targets:
+        combined_scan_results = nmap_analyzer.get_combined_scan_results(helper.target_to_folderpath(target, out_dir))
+        scan_results = False
+        
         if partial_scan:
             scan_results = partial_scan_ip(target)
         elif fast_scan:
             scan_results = fast_scan_ip(target)
-        else:
+        elif full_scan:
             scan_results = full_scan_ip(target)
 
-        if len(scan_results["ports"]) > 0:
-                scan_results = detailed_scan_ip(target, scan_results["ports"])
+        combined_scan_results = nmap_analyzer.join_host_info(combined_scan_results, scan_results)
+
+        if len(combined_scan_results["ports"]) > 0:
+            scan_results = detailed_scan_ip(target, combined_scan_results["ports"])
         logger.info(f"    [P] {nmap_analyzer.get_ports_fingerprint(scan_results['ports'])}")
 
 def analyze(arguments):
     logger.debug("ANALYSIS MODE")
     logger.debug("=============")
     logger.debug("")
-    f = nmap_analyzer.Filter()
+    fil = nmap_analyzer.Filter()
     if arguments.hostname_file != '':
         with open(arguments.hostname_file, "r") as f:
             input_data = f.readlines()
@@ -78,13 +86,13 @@ def analyze(arguments):
             logger.error("You have to supply the allowed hosts in via -i.")
             exit()
         raw_targets = parse_raw_targets(input_data)
-        f.whitelist_hosts = raw_targets
+        fil.whitelist_hosts = raw_targets
     if arguments.filter_top1000:
-        f.whitelist_ports = nmap_analyzer.top1000_ports
+        fil.whitelist_ports = nmap_analyzer.top1000_ports
     elif arguments.filter_not_top1000:
-        f.blacklist_ports = nmap_analyzer.top1000_ports
+        fil.blacklist_ports = nmap_analyzer.top1000_ports
 
-    hosts = nmap_analyzer.parse_all_hosts(out_dir, f)
+    hosts = nmap_analyzer.parse_all_hosts(out_dir, fil)
 
     if arguments.operation == "classes":
         nmap_analyzer.find_eq_classes(hosts, out_dir)
@@ -95,7 +103,7 @@ def cleanup(arguments):
     logger.debug("CLEANUP MODE")
     logger.debug("============")
     logger.debug("")
-    input_data = arguments.args
+    input_data = arguments.targets
     if arguments.hostname_file != '':
         with open(arguments.hostname_file, "r") as f:
             input_data.extend(f.readlines())
@@ -133,10 +141,26 @@ def search(arguments):
         if x.strip() != '':
             ports.add(int(x.strip()))
 
-    logger.info(f"[+] Searching for: '{search_str}' in hosts that have one of {','.join([str(x) for x in ports])} open.")
+    logger.info(f"[+] Searching for: '{search_str}' in hosts that have one port of [{','.join([str(x) for x in ports])}] open.")
 
     hosts = nmap_analyzer.find_hosts(search_str, ports, out_dir)
     logger.info("\n".join(sorted(hosts)))
+
+def export(arguments):
+    logger.debug("EXPORT MODE")
+    logger.debug("============")
+    logger.debug("")
+    input_data = arguments.targets
+    if arguments.hostname_file != '':
+        with open(arguments.hostname_file, "r") as f:
+            input_data.extend(f.readlines())
+    targets = input_data
+    hosts = nmap_analyzer.parse_all_hosts(out_dir)
+
+    exporter.export_targets_latex(targets, hosts)
+
+
+
 
 def clean_up_folders(targets, directory):
     for target in targets:
@@ -155,12 +179,17 @@ def clean_up_folders(targets, directory):
 
 def clean_up_noports(targets, directory):
     for root, dirs, files in os.walk(directory):
-        for file in files:
-            for n in ("all_ports.xml", "partial_ports.xml", "detailed_ports.xml", "fast_ports.xml"):
-                path = os.path.join(root, dir, n)
-                tmp = nmap_analyzer.parse_nmap_xml(path, filter)
-                if len(tmp["ports"]):
-                    print(f"[!] File '{path}' is finished scan, but does not contain open ports. Delete (y/N)?")
+        for n in ("all_ports.xml", "partial_ports.xml", "detailed_ports.xml", "fast_ports.xml"):
+            path = os.path.join(root, n)
+            if os.path.exists(path):
+                tmp = nmap_analyzer.parse_nmap_xml(path)
+                if tmp == False:
+                    print(f"[!] File '{path}' could not be parsed. Delete (Y/n)?")
+                    r=input()
+                    if r.lower() != "n":
+                        os.remove(path)
+                elif len(tmp["ports"]) == 0:
+                    print(f"[!] File '{path}' does not contain open ports. Delete (y/N)?")
                     r=input()
                     if r.lower() == "y":
                         os.remove(path)
@@ -168,46 +197,136 @@ def clean_up_noports(targets, directory):
 def get_nmap_target(target):
     if target["hostname"] != "" and target["hostname"].lower() != "unknown":
         return target["hostname"]
-    return target["ip"]
+    return target["host_ip"]
 
-def nmap_scan(filename, nmap_arguments, ports=None):
+def single_target_scan(filename, nmap_arguments, ports=None):
     scan_exists, ports_to_scan = nmap_analyzer.nmap_xml_is_finished_run(filename+".xml", ports)
     if not scan_exists:
-        os.makedirs(f"{os.path.dirname(filename)}", exist_ok=True)
-        port_arg = ""
-        if ports != None:
-            port_arg = f"-p{','.join([str(i) for i in ports_to_scan])}"
-        nmap_command = f"nmap -vvvv {helper.nmap_exclude} {helper.nmap_dns_arg} {port_arg} -oA '{filename}' {nmap_arguments}"
-
-        logger.info(f"    [ ] Running: {nmap_command}")
-        os.system(nmap_command)
+        nmap_scan(filename, nmap_arguments, ports_to_scan)    
     else:
         logger.info(f"    [ ] {filename} already exists. Skipping port scan.")
+    
     return nmap_analyzer.parse_nmap_xml(filename+".xml")
+
+def nmap_scan(filename, nmap_arguments, ports_to_scan=None):
+    os.makedirs(f"{os.path.dirname(filename)}", exist_ok=True)
+    port_arg = ""
+    if ports_to_scan != None:
+        port_arg = f"-p{','.join([str(i) for i in ports_to_scan])}"
+    nmap_command = f"nmap -vvvv {helper.nmap_exclude} {helper.nmap_dns_arg} {port_arg} -oA '{filename}' {nmap_arguments}"
+
+    logger.info(f"    [ ] Running: {nmap_command}")
+    os.system(nmap_command)
+
+def split_batch_results(filepath, targets, filename):
+    outfile = None
+    with open(filepath+".nmap", "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("Nmap scan report for "):
+
+                # hostname and IP present
+                if line.strip().endswith(")"):
+                    ip = line.strip()[line.rfind("(")+1:-1]
+                    tmp = line[:line.rfind("(")-1]
+                    hostname = tmp[tmp.rfind(" ")+1:]
+                # No hostname present
+                else:
+                    hostname = ""
+                    tmp = line.strip()
+                    ip = tmp[tmp.rfind(" ")+1:]
+                
+                target = None
+                for t in targets:
+                    if t["host_ip"] == ip or t["hostname"] == hostname:
+                        target = t 
+                        break
+                
+                if outfile != None:
+                    outfile.close()
+                
+                target_folder = os.path.join(out_dir,helper.target_to_foldername(target))
+                os.makedirs(target_folder, exist_ok=True)
+                outfile = open(os.path.join(target_folder, filename+".nmap"), "w")
+            if outfile != None:
+                outfile.write(line)
+
+    start = ""
+    end = ""
+    hosts=[]
+    is_start = True
+    is_end = False
+    is_host = False
+    cur_host = ""
+    with open(filepath+".xml", "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("<host "):
+                is_host = True
+                is_start = False
+                is_end = False
+
+            
+            if is_start:
+                start += line
+            if is_end:
+                end += line
+            if is_host:
+                cur_host += line
+            
+            if line.startswith("</host>"):
+                is_host = False
+                is_start = False
+                is_end = True
+                hosts.append(cur_host)
+                cur_host = ""
+
+    
+    for host in hosts:
+        target = None
+        for t in targets:
+            if t["host_ip"] in host or t["hostname"] in host:
+                target = t
+                break
+
+        target_folder = helper.target_to_foldername(target)
+        os.makedirs(target_folder, exist_ok=True)
+        with open(os.path.join(out_dir,helper.target_to_foldername(target), filename+".xml"), "w") as o:
+            o.write(start+host+end)
+
+def batch_scan_ip(targets):
+    logger.info(f"[+] FULL PORTSCAN on {','.join([t['hostname'] for t in targets])}")
+    nmap_arguments = f"-p1-10 -T{arguments.aggressiveness} {' '.join([get_nmap_target(target) for target in targets])}"
+    
+    filename = "batch_ports"
+    filepath = os.path.join(f"{out_dir}",filename)
+    nmap_scan(filepath, nmap_arguments)
+
+    split_batch_results(filepath, targets, filename)
 
 def full_scan_ip(target):
     logger.info(f"[+] FULL PORTSCAN on {target['hostname']}")
-    filename = f"{out_dir}/{helper.target_to_foldername(target)}/all_ports"
+    filename = os.path.join(f"{out_dir}",f"{helper.target_to_foldername(target)}","all_ports")
     nmap_arguments = f"-p- -T{arguments.aggressiveness} {get_nmap_target(target)}"
-    return nmap_scan(filename, nmap_arguments)
+    return single_target_scan(filename, nmap_arguments)
 
 def partial_scan_ip(target):
     logger.info(f"[+] PARTIAL PORTSCAN on {target['hostname']}")
-    filename = f"{out_dir}/{helper.target_to_foldername(target)}/partial_ports"
+    filename = os.path.join(f"{out_dir}",f"{helper.target_to_foldername(target)}",f"partial_ports")
     nmap_arguments = f"-T{arguments.aggressiveness} {get_nmap_target(target)}"
-    return nmap_scan(filename, nmap_arguments)
+    return single_target_scan(filename, nmap_arguments)
 
 def fast_scan_ip(target):
     logger.info(f"[+] FAST PORTSCAN on {target['hostname']}")
-    filename = f"{out_dir}/{helper.target_to_foldername(target)}/fast_ports"
+    filename = os.path.join(f"{out_dir}",f"{helper.target_to_foldername(target)}",f"fast_ports")
     nmap_arguments = f"-p- --min-rate 1000 -T4 {get_nmap_target(target)}"
-    return nmap_scan(filename, nmap_arguments)
+    return single_target_scan(filename, nmap_arguments)
 
 def detailed_scan_ip(target, ports):
     logger.info(f"[+] DETAILED PORTSCAN on {target['hostname']}")
-    filename = f"{out_dir}/{helper.target_to_foldername(target)}/detailed_ports"
+    filename = os.path.join(f"{out_dir}",f"{helper.target_to_foldername(target)}",f"detailed_ports")
     nmap_arguments = f"-T{arguments.aggressiveness} -sC -sV {get_nmap_target(target)}"
-    return nmap_scan(filename, nmap_arguments, ports)
+    return single_target_scan(filename, nmap_arguments, ports)
 
 def parse_raw_targets(lines):
     return [x.strip().split(" ")[0] for x in lines]
@@ -228,13 +347,13 @@ def parse_targets(lines):
             comment = ""
         
         if helper.is_ip(ip):
-            targets.append({"ip": ip, "hostname": dns.get_hostname_by_ipv4(ip), "comment": comment})
+            targets.append({"host_ip": ip, "hostname": dns.get_hostname_by_ipv4(ip), "comment": comment})
         else:
             real_ips = dns.get_ipv4_by_hostname(ip)
             if(len(real_ips) == 0):
                 logger.info("Could not resolve hostname: "+ip)
                 continue
-            targets.append({"ip": real_ips[0], "hostname":ip, "comment":comment})
+            targets.append({"host_ip": real_ips[0], "hostname":ip, "comment":comment})
     return targets
 
 
@@ -250,7 +369,7 @@ discovery_parser = subparsers.add_parser('discover', help="Run in discover mode 
 discovery_parser.add_argument('-i', dest = 'ip_file', help = 'File that contains target IP ranges', default = '')
 discovery_parser.add_argument('-e', dest = 'excluded_ips', help = 'File that contains IPs / IP subnets that must not be scanned', default = '')
 discovery_parser.add_argument('-d', dest = 'dns_server', help = 'Use specified DNS server for reverse lookups', default = '')
-discovery_parser.add_argument('ip_ranges', nargs = '*', help = 'Target IP ranges', default = '') 
+discovery_parser.add_argument('ip_ranges', nargs = '*', help = 'Target IP ranges', default = []) 
 discovery_parser.set_defaults(func=discover)
 
 scan_parser = subparsers.add_parser('scan', help = 'Run in scan mode')
@@ -259,9 +378,10 @@ scan_parser.add_argument('-e', dest = 'excluded_ips', help = 'File that contains
 group = scan_parser.add_mutually_exclusive_group()
 group.add_argument('-f', dest = 'fast_scan', help = 'Enable fast scan (might miss ports)', action='store_true')
 group.add_argument('-p', dest = 'partial_scan', help = 'Enable partial scan', action = 'store_true')
+group.add_argument('-b', dest = 'batch_scan', help = 'Enable batch scan', action = 'store_true')
 scan_parser.add_argument('-a', dest = 'aggressiveness', help = 'Nmap aggressiveness', choices=["0","1","2","3","4","5"], default = '3')
 scan_parser.add_argument('-d', dest = 'dns_server', help = 'Use specified DNS server for reverse lookups', default = '')
-scan_parser.add_argument('hostnames', nargs = '*', help = 'Target hosts', default = '') 
+scan_parser.add_argument('hostnames', nargs = '*', help = 'Target hosts', default = []) 
 scan_parser.set_defaults(func=scan)
 
 show_parser = subparsers.add_parser('show', help = 'Show results for provided target')
@@ -281,9 +401,15 @@ analyze_parser.add_argument('-T', dest = 'filter_not_top1000', help = 'Analysis 
 analyze_parser.add_argument('operation', help = "analysis operation to be performed. classes: show equivalence class view of all hosts. flatlist: show services of all hosts", default = '', choices=["classes","flatlist"]) 
 analyze_parser.set_defaults(func=analyze)
 
-cleanup_parser = subparsers.add_parser('cleanup', help='Do nothing. Just update the folder names and check for inconsistent scanning results.')
+cleanup_parser = subparsers.add_parser('cleanup', help='Update the folder names and check for inconsistent scanning results. If no targets are provided, all folders are scanned for inconsistent scanning results.')
 cleanup_parser.add_argument('-i', dest = 'hostname_file', help = 'File that contains target IPs', default = '')
+cleanup_parser.add_argument('targets', nargs = '*', help = "targets to be cleaned up.", default = []) 
 cleanup_parser.set_defaults(func=cleanup)
+
+export_parser = subparsers.add_parser('export', help='Exports scan results')
+export_parser.add_argument('-i', dest = 'hostname_file', help = 'File that contains targets to be exported', default = '')
+export_parser.add_argument('targets', nargs = '*', help = "Targets to be exported", default = []) 
+export_parser.set_defaults(func=export)
 
 arguments = parser.parse_args()
 
