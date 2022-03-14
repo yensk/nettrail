@@ -195,8 +195,8 @@ def clean_up_noports(targets, directory):
                         os.remove(path)
 
 def get_nmap_target(target):
-    if target["hostname"] != "" and target["hostname"].lower() != "unknown":
-        return target["hostname"]
+    # if target["hostname"] != "" and target["hostname"].lower() != "unknown":
+    #     return target["hostname"]
     return target["host_ip"]
 
 def single_target_scan(filename, nmap_arguments, ports=None):

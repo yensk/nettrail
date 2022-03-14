@@ -40,7 +40,7 @@ def parse_nmap_range_scan(file_path):
         return {}
 
     xml_hosts = tree.findall("host[status]")
-    pdb.set_trace()
+    
     for xml_host in xml_hosts:
         if not xml_host.find("status").attrib["state"] == 'up':
             continue

@@ -2,8 +2,6 @@ import helper
 import pdb
 
 def export_targets_md(targets, hosts):
-    pdb.set_trace()
-
     for t in targets:
 
         if "host_ip" not in t:
