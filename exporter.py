@@ -28,9 +28,9 @@ def sanitize_latex_control_symbols(line):
 
 def export_targets_latex(targets, hosts):
     
-    print("\\begin{longtable}{R{1cm}|L{11.9cm}}")
 
     for t in targets:
+        print("\\begin{longtable}{R{1cm}|L{11.9cm}}")
         t = t.strip().upper()
         host = None
         for h in hosts:
@@ -61,4 +61,4 @@ def export_targets_latex(targets, hosts):
             ip = ""
             hostname = ""
         print("\\multicolumn{2}{l}{}\\\\")
-    print("\\end{longtable}")
+        print("\\end{longtable}")
